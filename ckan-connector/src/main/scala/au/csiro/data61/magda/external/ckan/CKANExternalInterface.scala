@@ -39,7 +39,7 @@ import au.csiro.data61.magda.external.ExternalInterface
 import au.csiro.data61.magda.util.Collections.mapCatching
 import java.time.ZoneOffset
 
-class CKANExternalInterface(interfaceConfig: InterfaceConfig, implicit val config: Config, implicit val system: ActorSystem, implicit val executor: ExecutionContext, implicit val materializer: Materializer) extends CKANProtocols with ExternalInterface with CKANConverters {
+class CKANExternalInterface(interfaceConfig: InterfaceConfig, implicit val config: Config, implicit val system: ActorSystem, implicit val executor: ExecutionContext, implicit val materializer: Materializer) extends CKANProtocols with CKANConverters {
   implicit val logger = Logging(system, getClass)
   implicit val fetcher = new HttpFetcher(interfaceConfig, system, materializer, executor)
   implicit val defaultOffset = ZoneOffset.of(config.getString("time.defaultOffset"))
@@ -56,15 +56,10 @@ class CKANExternalInterface(interfaceConfig: InterfaceConfig, implicit val confi
   }
   val baseUrl = s"api/3/action/package_search?${exclusionQueryString.map(q => s"fq=${q}").getOrElse("")}"
 
-  override def getDataSets(start: Long, number: Int): scala.concurrent.Future[List[DataSet]] =
+  override def getDataSets(start: Long, number: Int): scala.concurrent.Future[List[CKANDataSet]] =
     fetcher.request(s"$baseUrl&start=$start&rows=$number").flatMap { response =>
       response.status match {
-        case OK => Unmarshal(response.entity).to[CKANSearchResponse].map { ckanDataSet =>
-          mapCatching[CKANDataSet, DataSet](ckanDataSet.result.results,
-            { hit => ckanDataSetConv(interfaceConfig)(hit) },
-            { (e, item) => logger.error(e, "Could not parse item for {}: {}", interfaceConfig.name, item.toString) }
-          )
-        }
+        case OK => Unmarshal(response.entity).to[CKANSearchResponse].map { searchResponse => searchResponse.result.results }
         case _ => Unmarshal(response.entity).to[String].flatMap { entity =>
           val error = s"CKAN request failed with status code ${response.status} and entity $entity"
           Future.failed(new IOException(error))
