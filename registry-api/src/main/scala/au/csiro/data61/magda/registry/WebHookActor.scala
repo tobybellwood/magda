@@ -16,7 +16,7 @@ import scala.concurrent.Future
 import scala.concurrent.duration._
 
 object NotifyOneWebHookActor {
-  def props() = Props(new NotifyAllWebHooksActor())
+  def props() = Props(new NotifyOneWebHookActor())
 
   case object StartOne
   case object AckOne
@@ -41,9 +41,10 @@ class NotifyOneWebHookActor extends Actor {
   var originalSender: ActorRef = null
 
   def receive = {
-    case StartOne => sender() ! AckOne
-    case DoneOne => sender() ! AckOne
+    case StartOne => { println("StartOne"); sender() ! AckOne }
+    case DoneOne => { println("DoneOne"); sender() ! AckOne }
     case Notify(webHook) => {
+      println("Notify")
       this.originalSender = sender()
       val events = EventPersistence.streamEventsSince(webHook.lastEvent.get)
       events.grouped(maxEvents).map(events => {
@@ -181,8 +182,10 @@ class WebHookActor extends Actor with Protocols {
       }
     }
     case NotifyAllWebHooksActor.Done => {
+      println("WebHookActor done")
       isProcessing = false
       if (this.processAgain) {
+        println("Running again!")
         this.processAgain = false
         this.self ! "process"
       }
