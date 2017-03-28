@@ -15,66 +15,6 @@ import akka.util.Timeout
 import scala.concurrent.Future
 import scala.concurrent.duration._
 
-object NotifyOneWebHookActor {
-  def props() = Props(new NotifyOneWebHookActor())
-
-  case object StartOne
-  case object AckOne
-  case class Notify(webHook: WebHook)
-  case class NotificationSent(webHook: WebHook, payload: RecordsChangedWebHookPayload, success: Boolean)
-  case class NotificationComplete(webHook: WebHook, successes: Int, failures: Int)
-  case object DoneOne
-}
-
-class NotifyOneWebHookActor extends Actor {
-  import SendWebHookPayloadActor._
-  import NotifyOneWebHookActor._
-  import context.dispatcher
-
-  implicit val materializer = ActorMaterializer()(context)
-
-  val maxEvents = 100 // TODO: get this from config or something
-  val payloadSender = context.actorOf(SendWebHookPayloadActor.props, "WebHookPlayloadSender")
-  implicit val timeout = Timeout(10.seconds)
-  var successes = 0
-  var failures = 0
-  var originalSender: ActorRef = null
-
-  def receive = {
-    case StartOne => { println("StartOne"); sender() ! AckOne }
-    case DoneOne => { println("DoneOne"); sender() ! AckOne }
-    case Notify(webHook) => {
-      println("Notify")
-      this.originalSender = sender()
-      val events = EventPersistence.streamEventsSince(webHook.lastEvent.get)
-      events.grouped(maxEvents).map(events => {
-        val relevantEvents: Set[EventType] = Set(EventType.CreateRecord, EventType.CreateRecordAspect, EventType.DeleteRecord, EventType.PatchRecord, EventType.PatchRecordAspect)
-        val changeEvents = events.filter(event => relevantEvents.contains(event.eventType))
-        val recordIds = changeEvents.map(event => event.eventType match {
-          case EventType.CreateRecord | EventType.DeleteRecord | EventType.PatchRecord => event.data.fields("id").toString()
-          case _ => event.data.fields("recordId").toString()
-        }).toSet
-        RecordsChangedWebHookPayload(
-          action = "records.changed",
-          lastEventId = events.last.id.get,
-          events = changeEvents.toList,
-          records = recordIds.map(id => Record(id, id, Map())).toList
-        )
-      }).mapAsync(2)(payload => // 2 to make sure the next one is already in the actor's queue when the previous one finishes
-        (payloadSender ? Send(webHook, payload)).mapTo[NotificationSent].pipeTo(this.self))
-      .runForeach(_ => Unit)
-      .map(_ => NotificationComplete(webHook, this.successes, this.failures))
-      .pipeTo(this.self)
-    }
-    case NotificationComplete(webHook, successes, failures) => {
-      println("Notification complete")
-      this.originalSender ! AckOne
-      this.originalSender ! NotificationComplete(webHook, successes, failures)
-    }
-    case NotificationSent(_, _, success) => if (success) this.successes += 1 else this.failures += 1
-  }
-}
-
 object SendWebHookPayloadActor {
   def props() = Props(new SendWebHookPayloadActor())
 
@@ -104,7 +44,7 @@ class SendWebHookPayloadActor extends Actor with Protocols {
     case ReceivePostResponse(originalSender, webHook, payload, response) => {
       // TODO: if we don't get a 200 response, we should retry or something
       response.discardEntityBytes()
-      // TODO: doing this syncronously in the Actor is probably bad.  Wrap in a Future?
+      // TODO: doing this synchronously in the Actor is probably bad.  Wrap in a Future?
       DB localTx { session =>
         HookPersistence.setLastEvent(session, webHook.id.get, payload.lastEventId)
       }
@@ -151,7 +91,7 @@ class NotifyAllWebHooksActor extends Actor {
     case ProcessWebHooks(originalSender, webHooks) => {
       if (webHooks.length > 0) {
         println("Processing")
-        Source(webHooks).map(Notify(_)).runWith(Sink.actorRefWithAck(notifyOneActor, StartOne, AckOne, DoneOne))
+        Source(webHooks).map(Notify(_)).runWith(Sink.actorRefWithAck(notifyOneActor, Start, Ack, Done))
       } else {
         println("WebHook Processing: DONE")
         originalSender ! Done

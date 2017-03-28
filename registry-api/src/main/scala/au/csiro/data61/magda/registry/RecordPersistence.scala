@@ -343,7 +343,7 @@ object RecordPersistence extends Protocols with DiffsonProtocol {
   }
 
   private def rowToRecordSummary(rs: WrappedResultSet): RecordSummary = {
-      RecordSummary(rs.string("recordId"), rs.string("recordName"), rs.array("aspects").getArray().asInstanceOf[Array[String]].toList)
+      RecordSummary(rs.string("recordId"), rs.string("recordName"), rs.arrayOpt("aspects").map(_.getArray().asInstanceOf[Array[String]].toList).getOrElse(List()))
   }
 
   private def rowToRecord(aspectIds: Iterable[String])(rs: WrappedResultSet): Record = {
